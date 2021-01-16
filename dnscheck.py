@@ -45,6 +45,7 @@ class ShellResolver(BaseResolver):
         qname = request.q.qname
         ia = ip_address(handler.client_address[0])
         cmd = self.routes.get(qname)
+        print(f"cmd: {cmd}  qname: {qname}")
         if cmd in ['whoami','myip','ip','w']:
             rqt = QTYPE.TXT
             rqd = TXT(f"{str(ia)}")
