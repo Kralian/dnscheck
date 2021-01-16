@@ -4,7 +4,7 @@
 from subprocess import getoutput
 from dnslib.label import DNSLabel
 from dnslib.server import DNSServer,DNSHandler,BaseResolver,DNSLogger
-from dnslib import parse_time,RR, QTYPE,A,TXT,RCODE
+from dnslib import parse_time,RR, QTYPE,A,AAAA,TXT,RCODE
 from ipaddress import ip_address
 
 class ShellResolver(BaseResolver):
@@ -47,7 +47,7 @@ class ShellResolver(BaseResolver):
         #print(f"qtype: {request.q.qtype}")
         if qname in ['whoami','myip']:
             rqt = QTYPE.TXT
-            rqd = f"I see you from {str(ia)}"
+            rqd = TXT(f"I see you from {str(ia)}")
             if request.q.qtype in [QTYPE.A,QTYPE.AAAA]:
                 if ia.version is 6:
                     rqt = request.q.qtype
