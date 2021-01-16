@@ -50,12 +50,15 @@ class ShellResolver(BaseResolver):
             rqt = QTYPE.TXT
             rqd = TXT(f"{str(ia)}")
             if request.q.qtype in [QTYPE.A,QTYPE.AAAA]:
-                if ia.version is 6:
+                if ia.version is 6 and request.q.qtype == QTYPE.AAAA:
                     rqt = request.q.qtype
                     rqd = AAAA(str(ia))
-                else:
+                elif ia.version is 4 and request.q.qtype == QTYPE.A:
                     rqt = request.q.qtype
                     rqd = A(str(ia))
+                else:
+                    rqt = QTYPE.TXT
+                    rqd = TXT(f"client address and qtype mismatch, IP is {str(ia)}")
             reply.add_answer(RR(qname,rqt,ttl=self.ttl,rdata=rqd))
         else:
             if cmd:
