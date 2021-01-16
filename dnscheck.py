@@ -1,167 +1,131 @@
-#!/usr/bin/env python
-import socket
-import struct
-import argparse
-import time
-import logging
-import os
-import pwd
-import grp
-import dnslib
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-### Add argument parsing
-parser = argparse.ArgumentParser()
-parser.add_argument('-d', '--domain', required=True, help='The domain name to serve (remember trailing .) (required)')
-parser.add_argument('-l', '--logfile', help='The logfile to write output to', default='dnscheck.log')
-parser.add_argument('-U', '--user', help='Which user to drop privileges to after logfile open & port bind', default='nobody')
-parser.add_argument('-G', '--group', help='Which group to drop privileges to after logfile open & port bind', default='nobody')
-args=parser.parse_args()
+from subprocess import getoutput
+from dnslib.label import DNSLabel
+from dnslib.server import DNSServer,DNSHandler,BaseResolver,DNSLogger
+from dnslib import parse_time,RR, QTYPE,A,TXT,RCODE
+from ipaddress import ip_address
 
-### Configure logfile
-if os.access(args.logfile,os.F_OK):
-    ### logfile exists
-    if not os.access(args.logfile,os.W_OK):
-        print("Unable to write to logfile %s - bailing out" % args.logfile)
-        exit(1)
-else:
-    ### logfile doesn't exist
-    if not os.access(os.path.split(args.logfile)[0],os.W_OK):
-        print("Unable to write to logfile folder %s - bailing out" % os.path.split(args.logfile)[0])
-        exit(1)
-logging.basicConfig(filename=args.logfile,level=logging.INFO,format='%(levelname)s:%(message)s')
+class ShellResolver(BaseResolver):
+    """
+        Example dynamic resolver.
+        Maps DNS labels to shell commands and returns result as TXT record
+        (Note: No context is passed to the shell command)
 
-### Function to output to the console with a timestamp
-def output(message):
-    logging.info(" [%s] %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),message))
+        Shell commands are passed in a a list in <label>:<cmd> format - eg:
 
-def output_err(message):
-    logging.warning(" [%s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),message))
+            [ 'uptime.abc.com.:uptime', 'ls:ls' ]
 
-def drop_privileges(uid_name, gid_name):
-    if os.getuid() != 0:
-        # Not running as root
-        return
+        Would respond to requests to 'uptime.abc.com.' with the output
+        of the 'uptime' command.
 
-    # Get the uid/gid to drop to
-    running_uid = pwd.getpwnam(uid_name).pw_uid
-    running_gid = grp.getgrnam(gid_name).gr_gid
+        For non-absolute labels the 'origin' parameter is prepended
 
-    # Remove group privileges
-    os.setgroups([])
+    """
+    def __init__(self,routes,origin,ttl):
+        self.origin = DNSLabel(origin)
+        self.ttl = parse_time(ttl)
+        self.routes = {}
+        for r in routes:
+            route,_,cmd = r.partition(":")
+            if route.endswith('.'):
+                route = DNSLabel(route)
+            else:
+                route = self.origin.add(route)
+            self.routes[route] = cmd
 
-    # Try setting the new uid/gid
-    os.setgid(running_gid)
-    os.setuid(running_uid)
-
-    # Ensure a very conservative umask
-    old_umask = os.umask(0o77)
-
-class DNSQuery:
-    def __init__(self, data):
-        output(data)
-        self.data=data
-        self.qtype=None
-        self.domain=''
-        self.opcode = int((data[2] >> 3) & 15)                                      ### Opcode bits
-        if self.opcode == 0:                                                        ### opcode 0 is a standard query
-            position=12                                                             ### query begins at byte 12
-            labellength=int(data[position])                                         ### Length of the first label
-            while labellength != 0:                                                 ### search through data until a 0 byte is found
-                self.domain+=data[position+1:position+labellength+1]+'.'            ### add this label part to self.domain
-                position+=labellength+1                                             ### Move position to the beginning of the next label
-                labellength=ord(str(data[position]))                                ### Find length of the next label
-            self.qtype=data[position+1:position+3]                                  ### query type is the next two bytes
-            self.qtype=struct.unpack(">h",self.qtype)                               ### Convert to tuple of integers
-            self.qtype=self.qtype[0]                                                ### Get first element of the tuple
-            output(self.qtype)
-
-    def dnsheader(self,rcode):                                                      ### This function builds and returns a DNS header with the given rcode
-        packet=b''                                                                   ### Initialize packet variable
-        packet+=self.data[:2]                                                       ### Query ID (16 bits) (copied from original query)
-        packet+=b'\x81'                                                              ### QR, Opcode (4 bits), AA, TC, RA
-        if(rcode==5):
-            packet+=b'\x85'                                                          ### RA, Z, AD, CD, Rcode refused (4 bits)
-            packet+=self.data[4:6]                                                  ### QDCOUNT (16 bits) (copied from original query)
-            packet+=b'\x00\x00'                                                      ### ANCOUNT (16 bits)
-        elif(rcode==2):
-            packet+=b'\x82'                                                          ### RA, Z, AD, CD, Rcode servfail (4 bits)
-            packet+=self.data[4:6]                                                  ### QDCOUNT (16 bits) (copied from original query)
-            packet+=b'\x00\x00'                                                      ### ANCOUNT (16 bits)
+    def resolve(self,request,handler):
+        print("resolver:" + "-"*40)
+        reply = request.reply()
+        qname = request.q.qname
+        ia = ip_address(handler.client_address[0])
+        #print(f"handler: {dir(handler.handle)}")
+        #print(f"client_address: {ia}")
+        #print(f"qclass: {request.q.qclass}")
+        #print(f"qname: {request.q.qname}")
+        #print(f"qtype: {request.q.qtype}")
+        if qname in ['whoami','myip']:
+            rqt = QTYPE.TXT
+            rqd = f"I see you from {ia}"
+            if request.q.qtype in [QTYPE.A,QTYPE.AAAA]:
+                if ia.version is 6:
+                    rqt = request.q.qtype
+                    rqd = AAAA(str(ia))
+                else:
+                    rqt = request.q.qtype
+                    rqd = A(str(ia))
+            reply.add_answer(RR(qname,rqt,ttl=self.ttl,rdata=rqd))
         else:
-            packet+=b'\x80'                                                          ### Z, AD, CD, Rcode no error (4 bits)
-            packet+=self.data[4:6]                                                  ### QDCOUNT (16 bits) (copied from original query)
-            packet+=b'\x00\x02'                                                      ### ANCOUNT (16 bits)
-        packet+=b'\x00\x00'                                                          ### NSCOUNT (16 bits)
-        packet+=b'\x00\x00'                                                          ### ARCOUNT (16 bits)
-        return packet
-
-    def txtreply(self,empty=False):                                                 ### This function builds and returns a v4 RR response packet section
-        packet=b''                                                                   ### Initialize packet variable
-        temp=self.data.find(b'\x00',12)                                              ### Find the first 0 byte, marks the end of the question
-        packet+=self.data[12:temp+5]                                                ### Original RR question (variable length) (copied from original query)
-        if not empty:
-            ### add first RR in answer section
-            packet+=b'\xc0\x0c'                                                      ### Pointer to domain name (16 bits)
-            packet+=b'\x00\x10'                                                      ### RR type (TXT record) (16 bits)
-            packet+=b'\x00\x01'                                                      ### RR class (IN) (16 bits)
-            packet+=b'\x00\x00\x00\x3c'                                              ### RR TTL (60 seconds) (16 bits)
-            txt=b"Your DNS server IP is %s" % client[0]                              ### Put the answer string together
-            packet+=b'\x00'+chr(len(txt)+1)                                          ### RR RDLENGTH
-            packet+=bchr(len(txt))+txt                                               ### Answer
-            if not args.ip == None:                                                 ### add second RR in answer section
-                packet+=b'\xc0\x0c'                                                  ### Pointer to domain name (16 bits)
-                packet+=b'\x00\x10'                                                  ### RR type (TXT record) (16 bits)
-                packet+=b'\x00\x01'                                                  ### RR class (IN) (16 bits)
-                packet+=b'\x00\x00\x00\x3c'                                          ### RR TTL (60 seconds) (16 bits)
-                txt=args.badreply                                                   ### Default to args.badmessage
-                for ip in args.ip:                                                  ### Check each IP in args.ip
-                    if client[0] == ip:                                             ### Compare with client IP
-                        txt=args.goodreply                                          ### Match! Return args.goodmessage
-                        break                                                       ### Break out of the loop
-            packet+=b'\x00'+chr(len(txt)+1)                                          ### RR RDLENGTH
-            packet+=chr(len(txt))+txt                                               ### Answer
-        return packet
+            cmd = self.routes.get(qname)
+            if cmd:
+                output = getoutput(cmd).encode()
+                reply.add_answer(RR(qname,QTYPE.TXT,ttl=self.ttl,
+                                    rdata=TXT(output[:254])))
+            else:
+                reply.header.rcode = RCODE.NXDOMAIN
+        return reply
 
 if __name__ == '__main__':
-    #try:
-    #    if args.protocol=="4":
-    #        udpsocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)            ### Create IPv4 udp socket
-    #    else:
-    #        udpsocket = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)           ### Create IPv6 udp socket
-    #    udpsocket.bind(('',53))                                                     ### and bind to port 53
-    #except:
-    #    output_err("Unable to create and bind UDP socket on port 53, exiting.")
-    #    sys.exit()
 
-    try:
-        udpsocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)            ### Create IPv4 udp socket
-        #udpsocket = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)           ### Create IPv6 udp socket
-        udpsocket.bind(('',53))                                                     ### and bind to port 53
-    except:
-        output_err("Unable to create and bind UDP socket on port 53, exiting.")
-        sys.exit()
+    import argparse,sys,time
 
-    output("Dropping privileges...")
-    drop_privileges(uid_name=args.user,gid_name=args.group)
+    p = argparse.ArgumentParser(description="Shell DNS Resolver")
+    p.add_argument("--map","-m",action="append",required=True,
+                    metavar="<label>:<shell command>",
+                    help="Map label to shell command (multiple supported)")
+    p.add_argument("--origin","-o",default=".",
+                    metavar="<origin>",
+                    help="Origin domain label (default: .)")
+    p.add_argument("--ttl","-t",default="60s",
+                    metavar="<ttl>",
+                    help="Response TTL (default: 60s)")
+    p.add_argument("--port","-p",type=int,default=53,
+                    metavar="<port>",
+                    help="Server port (default:53)")
+    p.add_argument("--address","-a",default="",
+                    metavar="<address>",
+                    help="Listen address (default:all)")
+    p.add_argument("--udplen","-u",type=int,default=0,
+                    metavar="<udplen>",
+                    help="Max UDP packet length (default:0)")
+    p.add_argument("--tcp",action='store_true',default=False,
+                    help="TCP server (default: UDP only)")
+    p.add_argument("--log",default="request,reply,truncated,error",
+                    help="Log hooks to enable (default: +request,+reply,+truncated,+error,-recv,-send,-data)")
+    p.add_argument("--log-prefix",action='store_true',default=False,
+                    help="Log prefix (timestamp/handler/resolver) (default: False)")
+    args = p.parse_args()
 
-    output("Waiting for queries...")
-    try:
-        while 1:                                                                    ### loop while waiting for packets
-            data, client = udpsocket.recvfrom(1024)                                 ### Receive data from socket
-            servfail=False
-            querypacket = dnslib.DNSRecord.parse(data)
-            #output(querypacket)
-            output(querypacket.header.id)
+    resolver = ShellResolver(args.map,args.origin,args.ttl)
+    logger = DNSLogger(args.log,args.log_prefix)
 
-            output(querypacket.questions)
-            #response = querypacket.reply()
-            #response.add_answer(dnslib.RR.fromZone(f"que.sti.on 300 TXT No Response Needed for {client[0]}"))
+    print("Starting Shell Resolver (%s:%d) [%s]" % (
+                        args.address or "*",
+                        args.port,
+                        "UDP/TCP" if args.tcp else "UDP"))
 
-            response = dnslib.DNSRecord(dnslib.DNSHeader(qr=1,aa=1,ra=1,id=querypacket.header.id),
-                                      q=dnslib.DNSQuestion("que.sti.on"),
-                                      a=dnslib.RR("que.sti.on",rdata=dnslib.A("127.0.0.1")))
+    for route,cmd in resolver.routes.items():
+        print("    | ",route,"-->",cmd)
+    print()
 
-            udpsocket.sendto(response.pack(),client)                                ### Respond
-    except KeyboardInterrupt:
-        output('Control-c received, exiting')
-        udpsocket.close()
+    if args.udplen:
+        DNSHandler.udplen = args.udplen
+
+    udp_server = DNSServer(resolver,
+                           port=args.port,
+                           address=args.address,
+                           logger=logger)
+    udp_server.start_thread()
+
+    if args.tcp:
+        tcp_server = DNSServer(resolver,
+                               port=args.port,
+                               address=args.address,
+                               tcp=True,
+                               logger=logger)
+        tcp_server.start_thread()
+
+    while udp_server.isAlive():
+        time.sleep(1)
+
