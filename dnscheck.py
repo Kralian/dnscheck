@@ -47,7 +47,7 @@ class ShellResolver(BaseResolver):
         #print(f"qtype: {request.q.qtype}")
         if qname in ['whoami','myip']:
             rqt = QTYPE.TXT
-            rqd = TXT(f"I see you from {str(ia)}")
+            rqd = TXT(f"{str(ia)}")
             if request.q.qtype in [QTYPE.A,QTYPE.AAAA]:
                 if ia.version is 6:
                     rqt = request.q.qtype
