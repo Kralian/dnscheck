@@ -1,3 +1,4 @@
-dnscheck.log
 .vscode
-supervisor.log
+dnscheck.log
+v4.supervisor.log
+v6.supervisor.log
