@@ -3,9 +3,12 @@
 
 from subprocess import getoutput
 from dnslib.label import DNSLabel
-from dnslib.server import DNSServer,DNSHandler,BaseResolver,DNSLogger
-from dnslib import parse_time,RR, QTYPE,A,AAAA,TXT,RCODE
+from dnslib.server import UDPServer, TCPServer, DNSHandler,BaseResolver,DNSLogger
+from dnslib import parse_time,RR, QTYPE,A,AAAA,TXT,RCODE,PTR
+import socket
 from ipaddress import ip_address
+import binascii,socket,struct,threading,time
+
 
 class ShellResolver(BaseResolver):
     """
@@ -48,18 +51,78 @@ class ShellResolver(BaseResolver):
         else:
             rqt = QTYPE.TXT
             rqd = TXT(f"{str(ia)}")
-            if request.q.qtype in [QTYPE.A,QTYPE.AAAA]:
+            if request.q.qtype in [QTYPE.A,QTYPE.AAAA,QTYPE.PTR]:
                 if ia.version is 6 and request.q.qtype == QTYPE.AAAA:
                     rqt = request.q.qtype
                     rqd = AAAA(str(ia))
                 elif ia.version is 4 and request.q.qtype == QTYPE.A:
                     rqt = request.q.qtype
                     rqd = A(str(ia))
+                elif request.q.qtype == QTYPE.PTR:
+                    rqt = request.q.qtype
+                    rqd = PTR(str(ia.reverse_pointer))
                 else:
                     rqt = QTYPE.TXT
                     rqd = TXT(f"client address and qtype mismatch, IP is {str(ia)}")
             reply.add_answer(RR(qname,rqt,ttl=self.ttl,rdata=rqd))
         return reply
+
+class DNSServer(object):
+
+    """
+        Convenience dual stack wrapper for socketserver instance allowing
+        either UDP/TCP server to be started in blocking more
+        or as a background thread.
+
+        Processing is delegated to custom resolver (instance) and
+        optionally custom logger (instance), handler (class), and
+        server (class)
+
+        In most cases only a custom resolver instance is required
+        (and possibly logger)
+    """
+    def __init__(self,resolver,
+                      address="",
+                      port=53,
+                      tcp=False,
+                      logger=None,
+                      handler=DNSHandler,
+                      server=None,
+                      ipv6=False):
+        """
+            resolver:   resolver instance
+            address:    listen address (default: "")
+            port:       listen port (default: 53)
+            tcp:        UDP (false) / TCP (true) (default: False)
+            logger:     logger instance (default: DNSLogger)
+            handler:    handler class (default: DNSHandler)
+            server:     socketserver class (default: UDPServer/TCPServer)
+        """
+        if not server:
+            if tcp:
+                server = TCPServer
+            else:
+                server = UDPServer
+        if ipv6:
+            server.address_family = socket.AF_INET6
+        self.server = server((address,port),handler)
+        self.server.resolver = resolver
+        self.server.logger = logger or DNSLogger()
+
+    def start(self):
+        self.server.serve_forever()
+
+    def start_thread(self):
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def stop(self):
+        self.server.shutdown()
+
+    def isAlive(self):
+        return self.thread.is_alive()
+
 
 if __name__ == '__main__':
 
@@ -104,23 +167,24 @@ if __name__ == '__main__':
         print("    | ",route,"-->",cmd)
     print()
 
+    ia = ip_address(args.address)
+
+
     if args.udplen:
         DNSHandler.udplen = args.udplen
 
-    udp_server = DNSServer(resolver,
-                           port=args.port,
-                           address=args.address,
-                           logger=logger)
+    if ia.version == 6:
+        udp_server = DNSServer(resolver, port=args.port, address=args.address, logger=logger, ipv6=True)
+    else:
+        udp_server = DNSServer(resolver, port=args.port, address=args.address, logger=logger)
     udp_server.start_thread()
 
-    if args.tcp:
-        tcp_server = DNSServer(resolver,
-                               port=args.port,
-                               address=args.address,
-                               tcp=True,
-                               logger=logger)
-        tcp_server.start_thread()
+    if ia.version == 6:
+        tcp_server = DNSServer(resolver, port=args.port, address=args.address, tcp=True, logger=logger, ipv6=True)
+    else:
+        tcp_server = DNSServer(resolver, port=args.port, address=args.address, tcp=True, logger=logger)
+    tcp_server.start_thread()
 
-    while udp_server.isAlive():
+    while udp_server.isAlive() and tcp_server.isAlive():
         time.sleep(1)
 
