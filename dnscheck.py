@@ -27,10 +27,6 @@ class ShellResolver(BaseResolver):
         self.origin = DNSLabel(origin)
         self.ttl = parse_time(ttl)
         self.routes = {}
-        for r in ['whoami','myip','ip','w']:
-            self.routes[DNSLabel(r+'.')] = r
-            route = self.origin.add(r)
-            self.routes[route] = r
         for r in routes:
             route,_,cmd = r.partition(":")
             if route.endswith('.'):
@@ -45,8 +41,11 @@ class ShellResolver(BaseResolver):
         qname = request.q.qname
         ia = ip_address(handler.client_address[0])
         cmd = self.routes.get(qname)
-        print(f"cmd: {cmd}  qname: {qname}")
-        if cmd in ['whoami','myip','ip','w']:
+        if cmd:
+            output = getoutput(cmd).encode()
+            reply.add_answer(RR(qname,QTYPE.TXT,ttl=self.ttl,
+                                rdata=TXT(output[:254])))
+        else:
             rqt = QTYPE.TXT
             rqd = TXT(f"{str(ia)}")
             if request.q.qtype in [QTYPE.A,QTYPE.AAAA]:
@@ -60,13 +59,6 @@ class ShellResolver(BaseResolver):
                     rqt = QTYPE.TXT
                     rqd = TXT(f"client address and qtype mismatch, IP is {str(ia)}")
             reply.add_answer(RR(qname,rqt,ttl=self.ttl,rdata=rqd))
-        else:
-            if cmd:
-                output = getoutput(cmd).encode()
-                reply.add_answer(RR(qname,QTYPE.TXT,ttl=self.ttl,
-                                    rdata=TXT(output[:254])))
-            else:
-                reply.header.rcode = RCODE.NXDOMAIN
         return reply
 
 if __name__ == '__main__':
