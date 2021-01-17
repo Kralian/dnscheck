@@ -52,6 +52,8 @@ class ShellResolver(BaseResolver):
             rqt = QTYPE.TXT
             rqd = TXT(f"{str(ia)}")
             if request.q.qtype in [QTYPE.A,QTYPE.AAAA,QTYPE.PTR]:
+                QTR = { QTYPE.A : "A", QTYPE.AAAA : "AAAA", QTYPE.PTR : "PTR" }
+                qt = QTR[request.q.qtype]
                 if ia.version is 6 and request.q.qtype == QTYPE.AAAA:
                     rqt = request.q.qtype
                     rqd = AAAA(str(ia))
@@ -61,6 +63,9 @@ class ShellResolver(BaseResolver):
                 elif request.q.qtype == QTYPE.PTR:
                     rqt = request.q.qtype
                     rqd = PTR(str(ia.reverse_pointer))
+                else:
+                    rqt = QTYPE.TXT
+                    rqd = TXT(f"Your request for {qt} confuses me, but here is the IP as text {str(ia)}")
             reply.add_answer(RR(qname,rqt,ttl=self.ttl,rdata=rqd))
         return reply
 
