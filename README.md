@@ -1,8 +1,8 @@
 # So simple it's almost a hack
 
 Lots of it is inspired by
-	https://github.com/tykling/tykdnscheck
-	https://pypi.org/project/dnslib/ aka https://github.com/paulc/dnslib
+ - https://github.com/tykling/tykdnscheck
+ - https://pypi.org/project/dnslib/ aka https://github.com/paulc/dnslib
 
 And some digging around in socketserver do find out what to put where to make it dual
 stack. I should probably suggest dnslib some kind of patch to DNSServer
