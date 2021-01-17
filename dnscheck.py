@@ -61,9 +61,6 @@ class ShellResolver(BaseResolver):
                 elif request.q.qtype == QTYPE.PTR:
                     rqt = request.q.qtype
                     rqd = PTR(str(ia.reverse_pointer))
-                else:
-                    rqt = QTYPE.TXT
-                    rqd = TXT(f"client address and qtype mismatch, IP is {str(ia)}")
             reply.add_answer(RR(qname,rqt,ttl=self.ttl,rdata=rqd))
         return reply
 
